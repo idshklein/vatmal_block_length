@@ -22,11 +22,19 @@ qgis_configure()
 
 df <- st_read("Tml_BuiltCells_160223_v3.gpkg")
 pols <- df %>%  
+  st_cast("POLYGON") %>% 
+  st_buffer(0.5) %>% 
   group_by(pl_id) %>% 
   summarise() %>% 
+  st_buffer(-0.5) %>% 
   st_cast("MULTIPOLYGON") %>% 
   st_remove_holes() %>% 
-  st_cast("POLYGON") 
+  st_cast("POLYGON") %>% 
+  st_buffer(-0.5) %>% 
+  st_cast("MULTIPOLYGON") %>% 
+  st_cast("POLYGON") %>%
+  st_buffer(0.5) %>% 
+  filter(!st_is_empty(geometry))
 ch <- pols %>% 
   mutate(rn = row_number()) %>%{
     q <- (.)
@@ -49,17 +57,9 @@ We've taken all non-road landuse polygons in vatmal (20622 polygons), and dissol
 ```{r show arara before and after}
 #| echo: false
 #| warning: false
-
 bef <- df %>% filter(pl_name == "מתחם דרומי ערערה") 
 before <- mapview(bef,col.regions = "red")
-af <- df %>%  
-  filter(pl_name == "מתחם דרומי ערערה") %>% 
-  group_by(pl_id) %>% 
-  summarise() %>% 
-  st_cast("MULTIPOLYGON") %>% 
-  st_remove_holes() %>% 
-  st_cast("POLYGON") %>% 
-  select(-pl_id)
+af <- pols %>% filter(pl_id == 99005236824 )
 after <-  mapview(af)
 before + after   
 ```
@@ -111,9 +111,11 @@ p4 <- tibble(ch_ar,mor_ar,pols_ar) %>%
   stat_ecdf()
 (p1 + p2)/ (p3+p4)
 ```
-blocks which were less than 2000 square meters were removed from the analysis. 
+blocks which were less than 1000 square meters were removed from the analysis. 
 
 ```{r function helped by gpt}
+#| echo: false
+#| warning: false
 calculate_segment_angles_directions <- function(geometry) {
   if (st_is(geometry, "LINESTRING")) {
     # Extract the vertices from the linestring
@@ -171,7 +173,7 @@ eventually, we count the number of components in each block. we have 4326 blocks
 #| cache: true
 #| echo: false
 #| warning: false
-vect <- which(pols_ar > 2000)
+vect <- which(pols_ar > 1000)
 pols2 <- pols[vect,]
 ch2 <- ch[vect,]
 mor2 <- mor[vect,]
@@ -343,6 +345,8 @@ ggpols2_res %>%
 ```
 
 ```{r download pols}
+#| echo: false
+#| warning: false
 # download_this(ggpols2_res %>% bind_cols(pols2) %>% mutate(geometry = map_chr(geometry,st_as_text,digits = 8)),
 #     output_name = "pols2",
 #     output_extension = ".csv",
@@ -457,6 +461,8 @@ ggmor2_res %>%
 ```
 
 ```{r download mor}
+#| echo: false
+#| warning: false
 # download_this(ggmor2_res %>% bind_cols(pols2) %>%  mutate(geometry = map_chr(geometry,st_as_text,digits = 8)),
 #     output_name = "mor2",
 #     output_extension = ".csv",
@@ -568,6 +574,8 @@ ggch2_res %>%
 ```
 
 ```{r downliad ch}
+#| echo: false
+#| warning: false
 # download_this(ggch2_res %>% bind_cols(pols2) %>% mutate(geometry = map_chr(geometry,st_as_text,digits = 8)),
 #     output_name = "ch2",
 #     output_extension = ".csv",
