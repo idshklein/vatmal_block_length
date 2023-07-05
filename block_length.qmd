@@ -1,0 +1,583 @@
+---
+title: "Vatmal block length"
+format: html
+editor: visual
+---
+
+
+
+```{r load libraries and configure qgis}
+#| echo: false
+#| warning: false
+pacman::p_load(tidyverse,sf,sfnetworks,tidygraph,lwgeom,mapview,nngeo,qgisprocess,cluster,furrr,dbscan,ggrepel,furrr,patchwork,downloadthis)
+qgis_configure()
+```
+
+
+
+```{r get data and run qgis anal}
+#| echo: false
+#| warning: false
+#| results: false
+
+df <- st_read("Tml_BuiltCells_160223_v3.gpkg")
+pols <- df %>%  
+  group_by(pl_id) %>% 
+  summarise() %>% 
+  st_cast("MULTIPOLYGON") %>% 
+  st_remove_holes() %>% 
+  st_cast("POLYGON") 
+ch <- pols %>% 
+  mutate(rn = row_number()) %>%{
+    q <- (.)
+    qgis_run_algorithm("qgis:minimumboundinggeometry",
+                       INPUT = q,
+                       FIELD = "rn",
+                       TYPE = "Convex Hull")
+  } %>% `$`("OUTPUT") %>% st_read()
+mor <- pols %>% 
+  mutate(rn = row_number()) %>%{
+    q <- (.)
+    qgis_run_algorithm("qgis:minimumboundinggeometry",
+                       INPUT = q,
+                       FIELD = "rn",
+                       TYPE = "Minimum Oriented Rectangle")
+  } %>% `$`("OUTPUT") %>% st_read()
+```
+## data
+We've taken all non-road landuse polygons in vatmal (20622 polygons), and dissolved the vorders in blocks(5606 blocks). this is an example from arara:
+```{r show arara before and after}
+#| echo: false
+#| warning: false
+
+bef <- df %>% filter(pl_name == "מתחם דרומי ערערה") 
+before <- mapview(bef,col.regions = "red")
+af <- df %>%  
+  filter(pl_name == "מתחם דרומי ערערה") %>% 
+  group_by(pl_id) %>% 
+  summarise() %>% 
+  st_cast("MULTIPOLYGON") %>% 
+  st_remove_holes() %>% 
+  st_cast("POLYGON") %>% 
+  select(-pl_id)
+after <-  mapview(af)
+before + after   
+```
+
+## analysis
+we have few ways to take blocks into accounts:
+1) as they are 
+2) as Minimum Oriented Rectangle(MOR), which is very similar to a bounding box, just with an angle
+3) as Convex Hull(CH) - a shape that "wrap" the block as a present, and makes sure it does not have any reflex angles
+
+```{r example of blocks with arara}
+#| echo: false
+#| warning: false
+arara_blocks <-  af
+arara_blocks1 <- mapview(arara_blocks,col.regions = "red")
+arara <- df %>% filter(pl_name == "מתחם דרומי ערערה") %>% pull(pl_id) %>% unique()
+
+arara_ch <- ch %>%
+  mutate(pl_id = pols$pl_id) %>% 
+  filter(pl_id == arara)
+arara_ch1 <- mapview(arara_ch,col.regions = "yellow")
+arara_mor <- mor %>%
+  mutate(pl_id = pols$pl_id) %>% 
+  filter(pl_id == arara)
+arara_mor1 <- mapview(arara_mor,col.regions = "blue")
+arara_blocks1 + arara_ch1 + arara_mor1
+
+```
+it is imperative to identify the right scope of analysis. 
+below are graphs that show the cumulative distribution of relative growth in block size in CH and MOR:
+
+```{r ecdf}
+#| echo: false
+#| warning: false
+ch_ar <- st_area(ch) %>% as.numeric()
+mor_ar <- st_area(mor) %>% as.numeric()
+pols_ar <- st_area(pols) %>% as.numeric()
+p1 <- tibble(ch_ar,mor_ar,pols_ar) %>% 
+  ggplot(aes(x=pols_ar,y=ch_ar)) + 
+  geom_point()
+p2 <- tibble(ch_ar,mor_ar,pols_ar) %>% 
+  ggplot(aes(x=pols_ar,y=mor_ar)) + 
+  geom_point()
+p3 <- tibble(ch_ar,mor_ar,pols_ar) %>% 
+  ggplot(aes(x=pols_ar/ch_ar)) + 
+  stat_ecdf()
+p4 <- tibble(ch_ar,mor_ar,pols_ar) %>% 
+  ggplot(aes(x=pols_ar/mor_ar)) + 
+  stat_ecdf()
+(p1 + p2)/ (p3+p4)
+```
+blocks which were less than 2000 square meters were removed from the analysis. 
+
+```{r function helped by gpt}
+calculate_segment_angles_directions <- function(geometry) {
+  if (st_is(geometry, "LINESTRING")) {
+    # Extract the vertices from the linestring
+    vertices <- st_coordinates(geometry)
+    
+    # Calculate the differences between consecutive vertices
+    diffs <- diff(vertices)
+    
+    # Calculate the angles between consecutive segments using atan2
+    angles <- atan2(diffs[c(nrow(diffs),1:(nrow(diffs)-1)), "Y"], diffs[c(nrow(diffs),1:(nrow(diffs)-1)), "X"]) - atan2(diffs[, "Y"], diffs[, "X"])
+    angles <- angles * 180 / pi
+    
+    # Adjust the angles to be between 0 and 360 degrees
+    angles <- ifelse(angles < 0, angles + 360, angles)
+    
+    # Calculate the lengths of segments before and after each angle
+    lengths_after <- sqrt(diffs[, "X"]^2 + diffs[, "Y"]^2)
+    lengths_before <- sqrt(diffs[c(nrow(diffs),1:(nrow(diffs)-1)), "X"]^2 + diffs[c(nrow(diffs),1:(nrow(diffs)-1)), "Y"]^2)
+    
+    # Calculate the directions based on the angles
+    directions <- ifelse(angles > 180, "Left","Right")
+    angles <- ifelse(angles > 180, 360 - angles, angles)
+    
+    # Return a data frame with the angles, lengths before, lengths after, and directions
+    return(data.frame(angles = angles, 
+                      lengths_before = lengths_before, 
+                      lengths_after = lengths_after, 
+                      x= vertices[-nrow(vertices),1],
+                      y= vertices[-nrow(vertices),2],
+                      directions = directions))
+  }
+  
+  if (st_is(geometry, "POLYGON")) {
+    # Extract the exterior ring of the polygon
+    ring <- st_cast(geometry, "LINESTRING")
+    
+    # Calculate the angles, lengths before, lengths after, and directions using the linestring calculation
+    result <- calculate_segment_angles_directions(ring)
+    
+    # Return the result
+    return(result)
+  }
+  
+  # Return NULL if the geometry type is not supported
+  return(NULL)
+}
+```
+
+we are splitting the blocks perimeter by left and right turns into components. 
+there were parameters involved: 
+if the length of a component was less than 26 meters and the angle turn sum was less than 40 degrees, it was united with the component beforehand
+afterwards, we carried out dbscan to cluster nearby points (less than 5 meters) in the block, to better understand where cuts are necessary
+eventually, we count the number of components in each block. we have 4326 blocks with up to 2 components. and 284 with 3 or more. their analysis is harder. however we will try to analyze all according to all of the methods. 
+```{r figure out where there are a lot of components of switching directions}
+#| cache: true
+#| echo: false
+#| warning: false
+vect <- which(pols_ar > 2000)
+pols2 <- pols[vect,]
+ch2 <- ch[vect,]
+mor2 <- mor[vect,]
+#
+plan(multisession, workers = 8)
+comp_count <- future_map(1:nrow(pols2),~{
+  line <-pols2[.x,]
+  result <- calculate_segment_angles_directions(line) 
+  result1 <- result%>%
+    mutate(cumlen = cumsum(lengths_before),
+           changed_dir = directions != lag(directions),
+           changed_dir = ifelse(is.na(changed_dir),F,changed_dir),
+           leg = cumsum(changed_dir) +1) %>%
+    group_by(leg) %>%
+    mutate(len = sum(lengths_before),
+           sum_angle = sum(angles),
+           directions = ifelse(len > 26&sum_angle >40,directions,NA)) %>%
+    ungroup() %>%
+    fill(directions,.direction="updown") %>%
+    mutate(changed_dir = directions != lag(directions),
+           changed_dir = ifelse(is.na(changed_dir),F,changed_dir),
+           leg = cumsum(changed_dir) +1) %>%
+    group_by(leg) %>%
+    mutate(len = sum(lengths_before),
+           sum_angle = sum(angles)) %>%
+    rowid_to_column("rn") 
+  dbs <- dbscan(ungroup(result1[,c("x","y")]),5,1)$cluster
+  result1 %>% 
+    ungroup() %>%
+    mutate(dbs=dbs) %>% 
+    st_as_sf(coords = c("x","y"),crs = 2039) %>%
+    {
+      eds <- data.frame(from = (.)$rn, to = (.)$rn[c(2:nrow(.),1)])
+      tbl_graph((.),eds) %>% 
+        as_sfnetwork() %>% 
+        convert(to_spatial_explicit) %E>% 
+        mutate(from_dir = .N()$directions[from],
+               to_dir = .N()$directions[to]) %>% 
+        filter(from_dir == to_dir) %N>% 
+        mutate(comp = group_components()) %>% 
+        as_tibble() 
+    } %>%
+    select(-.tidygraph_node_index) %>% 
+    st_drop_geometry() %>% 
+    group_by(comp) %>% 
+    mutate(comp_sum_len = sum(lengths_after ))%>% 
+    ungroup() %>% 
+    mutate(samedbscum = cumsum(dbs != lag(dbs,default = last(dbs)))==0) %>% 
+    group_split(samedbscum)  %>% 
+    bind_rows() %>%
+    group_by(dbs) %>%
+    mutate(sum_angle2 = sum(angles),
+           sum_len2 = sum(lengths_after[1:max(n()-1,1)]),
+           cumsum_len2 = cumsum(lengths_after),
+           ratio_len2 = cumsum_len2/sum_len2,
+           delta = abs(0.5 - ratio_len2),
+           slct = delta == min(delta)) %>%
+    ungroup() %>%
+    pull(comp) %>% 
+    unique()
+})
+comp_count %>% map_dbl(~.x %>% length) %>% table()
+```
+
+
+```{r pols2_res}
+#| cache: true
+#| echo: false
+#| warning: false
+# reg_anal <- comp_count %>% map_dbl(~.x %>% length) %>% `<=`(2) %>% which()
+# ch_anal <- (comp_count %>% map_dbl(~.x %>% length) %>% `>`(2) %>% which())[(ch_ar/pols_ar)[vect][comp_count %>% map_dbl(~.x %>% length) %>% `>`(2)  %>% which()]<1.5]
+# pols3 <- pols2[reg_anal,]
+# ch3 <- ch2[ch_anal,]
+# pols2
+# mor2
+# ch2
+plan(multisession, workers = 8)
+pols2_res <-future_map(1:nrow(pols2),~{
+  line <-pols2[.x,]
+  result <- calculate_segment_angles_directions(line) 
+  result1 <- result%>%
+    mutate(cumlen = cumsum(lengths_before),
+           changed_dir = directions != lag(directions),
+           changed_dir = ifelse(is.na(changed_dir),F,changed_dir),
+           leg = cumsum(changed_dir) +1) %>%
+    group_by(leg) %>%
+    mutate(len = sum(lengths_before),
+           sum_angle = sum(angles),
+           directions = ifelse(len > 26&sum_angle >40,directions,NA)) %>%
+    ungroup() %>%
+    fill(directions,.direction="updown") %>%
+    mutate(changed_dir = directions != lag(directions),
+           changed_dir = ifelse(is.na(changed_dir),F,changed_dir),
+           leg = cumsum(changed_dir) +1) %>%
+    group_by(leg) %>%
+    mutate(len = sum(lengths_before),
+           sum_angle = sum(angles)) %>%
+    rowid_to_column("rn") 
+  dbs <- dbscan(ungroup(result1[,c("x","y")]),5,1)$cluster
+  result1 %>% 
+    ungroup() %>%
+    mutate(dbs=dbs) %>% 
+    st_as_sf(coords = c("x","y"),crs = 2039) %>%
+    {
+      eds <- data.frame(from = (.)$rn, to = (.)$rn[c(2:nrow(.),1)])
+      tbl_graph((.),eds) %>% 
+        as_sfnetwork() %>% 
+        convert(to_spatial_explicit) %E>% 
+        mutate(from_dir = .N()$directions[from],
+               to_dir = .N()$directions[to]) %>% 
+        filter(from_dir == to_dir) %N>% 
+        mutate(comp = group_components()) %>% 
+        as_tibble() 
+    } %>%
+    select(-.tidygraph_node_index) %>% 
+    st_drop_geometry() %>% 
+    group_by(comp) %>% 
+    mutate(comp_sum_len = sum(lengths_after ))%>% 
+    ungroup() %>% 
+    mutate(samedbscum = cumsum(dbs != lag(dbs,default = last(dbs)))==0) %>% 
+    group_split(samedbscum)  %>% 
+    bind_rows() %>%
+    group_by(dbs) %>%
+    mutate(sum_angle2 = sum(angles),
+           sum_len2 = sum(lengths_after[1:max(n()-1,1)]),
+           cumsum_len2 = cumsum(lengths_after),
+           ratio_len2 = cumsum_len2/sum_len2,
+           delta = abs(0.5 - ratio_len2),
+           slct = delta == min(delta),
+           ns=n()) %>%
+    ungroup() %>%
+    mutate(complag2 = lag(comp,default = last(comp))==2,
+           complead2 = lead(comp,default = first(comp))==2,
+           comp2=ifelse(complag2|complead2,2,comp)) %>%
+    group_by(slct) %>%
+    mutate(slct2 = rank(-sum_angle2)) %>%
+    as.data.frame() %>%
+    arrange(slct2) %>% 
+    mutate(morethan45 = sum_angle2 > 45) %>% 
+    arrange(rn) %>% 
+    mutate(slct3= slct&morethan45,
+           cumm = cumsum(slct3)) %>% 
+    select(cumm, everything()) %>% 
+    group_split(cumm) %>% 
+    {
+      q <- (.)
+      if(q[[1]]$cumm[1] == 0){
+        lt <- length(q)
+        ret <- q[c(2:lt,1)]  
+      }else{
+        ret <- q
+      }
+      q
+    } %>% 
+    bind_rows() %>% 
+    mutate(cumm = cummax(cumm)  )%>%
+    group_by(cumm) %>% 
+    summarise(lengths_after=sum(lengths_after)) 
+})
+ggpols2_res <- pols2_res %>% map(~.x %>% arrange(-lengths_after) %>% ungroup() %>% rowid_to_column("rn") %>% select(-cumm) %>% spread(rn,lengths_after)) %>% bind_rows()
+ggpols2_res %>% 
+  mutate(pl_id = pols2$pl_id) %>% 
+  select(pl_id,everything()) %>% 
+  select(1:10) %>% 
+  gather(n,meter,-pl_id) %>% 
+  ggplot(aes(x=meter)) + 
+  geom_histogram() + 
+  facet_wrap(~n)
+```
+
+```{r download pols}
+# download_this(ggpols2_res %>% bind_cols(pols2) %>% mutate(geometry = map_chr(geometry,st_as_text,digits = 8)),
+#     output_name = "pols2",
+#     output_extension = ".csv",
+#     button_label = "Download polygons analysis",
+#     button_type = "warning",
+#     has_icon = TRUE,
+#     icon = "fa fa-save",
+#     id = 'pols' # add an id to this button
+#   )
+
+ggpols2_res %>% bind_cols(pols2) %>% st_sf() %>% st_write("pols.gpkg")
+```
+
+
+{{< downloadthis pols.gpkg dname="pols.gpkg" label="Download pols layer" icon="database-fill-down" type="info" >}}
+
+```{r mor2_res}
+#| cache: true
+#| echo: false
+#| warning: false
+plan(multisession, workers = 8)
+mor2_res <- future_map(1:nrow(mor2),~{
+  line <-mor2[.x,]
+  result <- calculate_segment_angles_directions(line) 
+  result1 <- result%>%
+    mutate(cumlen = cumsum(lengths_before),
+           changed_dir = directions != lag(directions),
+           changed_dir = ifelse(is.na(changed_dir),F,changed_dir),
+           leg = cumsum(changed_dir) +1) %>%
+    group_by(leg) %>%
+    mutate(len = sum(lengths_before),
+           sum_angle = sum(angles),
+           directions = ifelse(len > 26&sum_angle >40,directions,NA)) %>%
+    ungroup() %>%
+    fill(directions,.direction="updown") %>%
+    mutate(changed_dir = directions != lag(directions),
+           changed_dir = ifelse(is.na(changed_dir),F,changed_dir),
+           leg = cumsum(changed_dir) +1) %>%
+    group_by(leg) %>%
+    mutate(len = sum(lengths_before),
+           sum_angle = sum(angles)) %>%
+    rowid_to_column("rn") 
+  dbs <- dbscan(ungroup(result1[,c("x","y")]),5,1)$cluster
+  result1 %>% 
+    ungroup() %>%
+    mutate(dbs=dbs) %>% 
+    st_as_sf(coords = c("x","y"),crs = 2039) %>%
+    {
+      eds <- data.frame(from = (.)$rn, to = (.)$rn[c(2:nrow(.),1)])
+      tbl_graph((.),eds) %>% 
+        as_sfnetwork() %>% 
+        convert(to_spatial_explicit) %E>% 
+        mutate(from_dir = .N()$directions[from],
+               to_dir = .N()$directions[to]) %>% 
+        filter(from_dir == to_dir) %N>% 
+        mutate(comp = group_components()) %>% 
+        as_tibble() 
+    } %>%
+    select(-.tidygraph_node_index) %>% 
+    st_drop_geometry() %>% 
+    group_by(comp) %>% 
+    mutate(comp_sum_len = sum(lengths_after ))%>% 
+    ungroup() %>% 
+    mutate(samedbscum = cumsum(dbs != lag(dbs,default = last(dbs)))==0) %>% 
+    group_split(samedbscum)  %>% 
+    bind_rows() %>%
+    group_by(dbs) %>%
+    mutate(sum_angle2 = sum(angles),
+           sum_len2 = sum(lengths_after[1:max(n()-1,1)]),
+           cumsum_len2 = cumsum(lengths_after),
+           ratio_len2 = cumsum_len2/sum_len2,
+           delta = abs(0.5 - ratio_len2),
+           slct = delta == min(delta),
+           ns=n()) %>%
+    ungroup() %>%
+    mutate(complag2 = lag(comp,default = last(comp))==2,
+           complead2 = lead(comp,default = first(comp))==2,
+           comp2=ifelse(complag2|complead2,2,comp)) %>%
+    group_by(slct) %>%
+    mutate(slct2 = rank(-sum_angle2)) %>%
+    as.data.frame() %>%
+    arrange(slct2) %>% 
+    mutate(morethan45 = sum_angle2 > 45) %>% 
+    arrange(rn) %>% 
+    mutate(slct3= slct&morethan45,
+           cumm = cumsum(slct3)) %>% 
+    select(cumm, everything()) %>% 
+    group_split(cumm) %>% 
+    {
+      q <- (.)
+      if(q[[1]]$cumm[1] == 0){
+        lt <- length(q)
+        ret <- q[c(2:lt,1)]  
+      }else{
+        ret <- q
+      }
+      q
+    } %>% 
+    bind_rows() %>% 
+    mutate(cumm = cummax(cumm)  )%>%
+    group_by(cumm) %>% 
+    summarise(lengths_after=sum(lengths_after)) 
+})
+ggmor2_res <- mor2_res %>% map(~.x %>% arrange(-lengths_after) %>% ungroup() %>% rowid_to_column("rn") %>% select(-cumm) %>% spread(rn,lengths_after)) %>% bind_rows()
+ggmor2_res %>% 
+  mutate(pl_id = pols2$pl_id) %>% 
+  select(pl_id,everything()) %>% 
+  gather(n,meter,-pl_id) %>% 
+  ggplot(aes(x=meter)) + 
+  geom_histogram() + 
+  facet_wrap(~n)
+```
+
+```{r download mor}
+# download_this(ggmor2_res %>% bind_cols(pols2) %>%  mutate(geometry = map_chr(geometry,st_as_text,digits = 8)),
+#     output_name = "mor2",
+#     output_extension = ".csv",
+#     button_label = "Download MOR analysis",
+#     button_type = "warning",
+#     has_icon = TRUE,
+#     icon = "fa fa-save",
+#     id = 'mor' # add an id to this button
+#   )
+ggmor2_res %>% bind_cols(mor2) %>% st_sf() %>% st_write("mor.gpkg")
+```
+{{< downloadthis mor.gpkg dname="mor.gpkg" label="Download mor layer" icon="database-fill-down" type="info" >}}
+
+
+```{r ch2_res}
+#| cache: true
+#| echo: false
+#| warning: false
+ch2_res <- future_map(1:nrow(ch2),~{
+  line <-ch2[.x,]
+  result <- calculate_segment_angles_directions(line) 
+  result1 <- result%>%
+    mutate(cumlen = cumsum(lengths_before),
+           changed_dir = directions != lag(directions),
+           changed_dir = ifelse(is.na(changed_dir),F,changed_dir),
+           leg = cumsum(changed_dir) +1) %>%
+    group_by(leg) %>%
+    mutate(len = sum(lengths_before),
+           sum_angle = sum(angles),
+           directions = ifelse(len > 26&sum_angle >40,directions,NA)) %>%
+    ungroup() %>%
+    fill(directions,.direction="updown") %>%
+    mutate(changed_dir = directions != lag(directions),
+           changed_dir = ifelse(is.na(changed_dir),F,changed_dir),
+           leg = cumsum(changed_dir) +1) %>%
+    group_by(leg) %>%
+    mutate(len = sum(lengths_before),
+           sum_angle = sum(angles)) %>%
+    rowid_to_column("rn") 
+  dbs <- dbscan(ungroup(result1[,c("x","y")]),5,1)$cluster
+  result1 %>% 
+    ungroup() %>%
+    mutate(dbs=dbs) %>% 
+    st_as_sf(coords = c("x","y"),crs = 2039) %>%
+    {
+      eds <- data.frame(from = (.)$rn, to = (.)$rn[c(2:nrow(.),1)])
+      tbl_graph((.),eds) %>% 
+        as_sfnetwork() %>% 
+        convert(to_spatial_explicit) %E>% 
+        mutate(from_dir = .N()$directions[from],
+               to_dir = .N()$directions[to]) %>% 
+        filter(from_dir == to_dir) %N>% 
+        mutate(comp = group_components()) %>% 
+        as_tibble() 
+    } %>%
+    select(-.tidygraph_node_index) %>% 
+    st_drop_geometry() %>% 
+    group_by(comp) %>% 
+    mutate(comp_sum_len = sum(lengths_after ))%>% 
+    ungroup() %>% 
+    mutate(samedbscum = cumsum(dbs != lag(dbs,default = last(dbs)))==0) %>% 
+    group_split(samedbscum)  %>% 
+    bind_rows() %>%
+    group_by(dbs) %>%
+    mutate(sum_angle2 = sum(angles),
+           sum_len2 = sum(lengths_after[1:max(n()-1,1)]),
+           cumsum_len2 = cumsum(lengths_after),
+           ratio_len2 = cumsum_len2/sum_len2,
+           delta = abs(0.5 - ratio_len2),
+           slct = delta == min(delta),
+           ns=n()) %>%
+    ungroup() %>%
+    mutate(complag2 = lag(comp,default = last(comp))==2,
+           complead2 = lead(comp,default = first(comp))==2,
+           comp2=ifelse(complag2|complead2,2,comp)) %>%
+    group_by(slct) %>%
+    mutate(slct2 = rank(-sum_angle2)) %>%
+    as.data.frame() %>%
+    arrange(slct2) %>% 
+    mutate(morethan30 = sum_angle2 > 30) %>% 
+    arrange(rn) %>% 
+    mutate(slct3= slct&morethan30,
+           cumm = cumsum(slct3)) %>% 
+    select(cumm, everything()) %>% 
+    group_split(cumm) %>% 
+    {
+      q <- (.)
+      if(q[[1]]$cumm[1] == 0){
+        lt <- length(q)
+        ret <- q[c(2:lt,1)]  
+      }else{
+        ret <- q
+      }
+      q
+    } %>% 
+    bind_rows() %>% 
+    mutate(cumm = cummax(cumm)  )%>%
+    group_by(cumm) %>% 
+    summarise(lengths_after=sum(lengths_after)) 
+})
+ggch2_res <- ch2_res %>% map(~.x %>% arrange(-lengths_after) %>% ungroup() %>% rowid_to_column("rn") %>% select(-cumm) %>% spread(rn,lengths_after)) %>% bind_rows()
+ggch2_res %>% 
+  mutate(pl_id = pols2$pl_id) %>% 
+  select(pl_id,everything()) %>% 
+  gather(n,meter,-pl_id) %>% 
+  ggplot(aes(x=meter)) + 
+  geom_histogram() + 
+  facet_wrap(~n)
+```
+
+```{r downliad ch}
+# download_this(ggch2_res %>% bind_cols(pols2) %>% mutate(geometry = map_chr(geometry,st_as_text,digits = 8)),
+#     output_name = "ch2",
+#     output_extension = ".csv",
+#     button_label = "Download CH analysis",
+#     button_type = "warning",
+#     has_icon = TRUE,
+#     icon = "fa fa-save",
+#     id = 'ch' # add an id to this button
+#   )
+ggch2_res %>% bind_cols(ch2) %>% st_sf() %>% st_write("ch.gpkg")
+```
+
+{{< downloadthis ch.gpkg dname="ch.gpkg" label="Download ch layer" icon="database-fill-down" type="info" >}}

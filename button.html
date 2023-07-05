@@ -1,0 +1,53 @@
+<style>
+  #pols:focus,
+  #pols:active  {
+     box-shadow: none !important;
+  }
+  
+  #pols:hover {
+     transition: 0.2s;
+     filter: brightness(0.90);
+  }
+  
+  #pols:active {
+     filter: brightness(0.80);
+}
+#mtcars-btn:focus,
+  #mtcars-btn:active  {
+     box-shadow: none !important;
+  }
+  
+  #mtcars-btn:hover {
+     transition: 0.2s;
+     filter: brightness(0.90);
+  }
+  
+  #mtcars-btn:active {
+     filter: brightness(0.80);
+}#ch:focus,
+  #ch:active  {
+     box-shadow: none !important;
+  }
+  
+  #ch:hover {
+     transition: 0.2s;
+     filter: brightness(0.90);
+  }
+  
+  #ch:active {
+     filter: brightness(0.80);
+}
+</style>
+
+<script>
+  function add_href() {
+    let mtcars_a = document.querySelector("a:has(#pols)");
+    mtcars_a.href = '#pols';
+	let mtcars_a = document.querySelector("a:has(#ch)");
+    mtcars_a.href = '#ch';
+	let mtcars_a = document.querySelector("a:has(#mor)");
+    mtcars_a.href = '#mor';
+  }
+  
+  window.onload = add_href;
+</script>
