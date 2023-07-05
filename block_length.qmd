@@ -45,7 +45,7 @@ mor <- pols %>%
   } %>% `$`("OUTPUT") %>% st_read()
 ```
 ## data
-We've taken all non-road landuse polygons in vatmal (20622 polygons), and dissolved the vorders in blocks(5606 blocks). this is an example from arara:
+We've taken all non-road landuse polygons in vatmal (20622 polygons), and dissolved the נorders in blocks(5606 blocks). this is an example from arara:
 ```{r show arara before and after}
 #| echo: false
 #| warning: false
@@ -353,7 +353,7 @@ ggpols2_res %>%
 #     id = 'pols' # add an id to this button
 #   )
 
-ggpols2_res %>% bind_cols(pols2) %>% st_sf() %>% st_write("pols.gpkg")
+ggpols2_res %>% bind_cols(pols2) %>% st_sf() %>% st_write("pols.gpkg",delete_layer =T)
 ```
 
 
@@ -466,7 +466,7 @@ ggmor2_res %>%
 #     icon = "fa fa-save",
 #     id = 'mor' # add an id to this button
 #   )
-ggmor2_res %>% bind_cols(mor2) %>% st_sf() %>% st_write("mor.gpkg")
+ggmor2_res %>% bind_cols(mor2) %>% st_sf() %>% st_write("mor.gpkg",delete_layer =T)
 ```
 {{< downloadthis mor.gpkg dname="mor.gpkg" label="Download mor layer" icon="database-fill-down" type="info" >}}
 
@@ -577,7 +577,7 @@ ggch2_res %>%
 #     icon = "fa fa-save",
 #     id = 'ch' # add an id to this button
 #   )
-ggch2_res %>% bind_cols(ch2) %>% st_sf() %>% st_write("ch.gpkg")
+ggch2_res %>% bind_cols(ch2) %>% st_sf() %>% st_write("ch.gpkg",delete_layer =T)
 ```
 
 {{< downloadthis ch.gpkg dname="ch.gpkg" label="Download ch layer" icon="database-fill-down" type="info" >}}
