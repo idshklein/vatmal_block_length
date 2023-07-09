@@ -111,7 +111,7 @@ p4 <- tibble(ch_ar,mor_ar,pols_ar) %>%
   stat_ecdf()
 (p1 + p2)/ (p3+p4)
 ```
-blocks which were less than 1000 square meters were removed from the analysis. 
+blocks which were less than 500 square meters were removed from the analysis. 
 
 ```{r function helped by gpt}
 #| echo: false
@@ -170,10 +170,10 @@ if the length of a component was less than 26 meters and the angle turn sum was 
 afterwards, we carried out dbscan to cluster nearby points (less than 5 meters) in the block, to better understand where cuts are necessary
 eventually, we count the number of components in each block. we have 4326 blocks with up to 2 components. and 284 with 3 or more. their analysis is harder. however we will try to analyze all according to all of the methods. 
 ```{r figure out where there are a lot of components of switching directions}
-#| cache: true
+#| cache: false
 #| echo: false
 #| warning: false
-vect <- which(pols_ar > 1000)
+vect <- which(pols_ar > 500)
 pols2 <- pols[vect,]
 ch2 <- ch[vect,]
 mor2 <- mor[vect,]
@@ -240,7 +240,7 @@ comp_count %>% map_dbl(~.x %>% length) %>% table()
 
 
 ```{r pols2_res}
-#| cache: true
+#| cache: false
 #| echo: false
 #| warning: false
 # reg_anal <- comp_count %>% map_dbl(~.x %>% length) %>% `<=`(2) %>% which()
@@ -364,7 +364,7 @@ ggpols2_res %>% bind_cols(pols2) %>% st_sf() %>% st_write("pols.gpkg",delete_lay
 {{< downloadthis pols.gpkg dname="pols.gpkg" label="Download pols layer" icon="database-fill-down" type="info" >}}
 
 ```{r mor2_res}
-#| cache: true
+#| cache: false
 #| echo: false
 #| warning: false
 plan(multisession, workers = 8)
@@ -478,7 +478,7 @@ ggmor2_res %>% bind_cols(mor2) %>% st_sf() %>% st_write("mor.gpkg",delete_layer 
 
 
 ```{r ch2_res}
-#| cache: true
+#| cache: false
 #| echo: false
 #| warning: false
 ch2_res <- future_map(1:nrow(ch2),~{

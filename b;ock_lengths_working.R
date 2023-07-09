@@ -161,7 +161,6 @@ res <- future_map(1:nrow(pols2),~{
 res %>% map_dbl(~.x %>% length) %>% table()
 pols2[160,] %>% plot()
 reg_anal <- res %>% map_dbl(~.x %>% length) %>% `<=`(2) %>% which()
-reg_anal2 <-  res %>% map_dbl(~.x %>% length) %>% `==`(2) %>% which()
 ch_anal <- (res %>% map_dbl(~.x %>% length) %>% `>`(2) %>% which())[(ch_ar/pols_ar)[vect][res %>% map_dbl(~.x %>% length) %>% `>`(2)  %>% which()]<1.5] 
 pols3 <- pols2[reg_anal,]
 ch3 <- ch2[ch_anal,]
@@ -228,15 +227,15 @@ res2 <- future_map(1:nrow(pols3),~{
     as.data.frame() %>%
     arrange(slct2)
 })
-res2 %>% 
-  imap(~.x %>% mutate(idx = .y)) %>% 
-  bind_rows() %>% 
-  group_by(idx) %>% 
-  mutate(comt = max(comp2)) %>% 
-  slice(1) %>% 
-  filter(comt==2, round(sum_angle2) == 180,ns==2) %>% 
-  pull(idx) %>% 
-  `[`(93)
+# res2 %>% 
+#   imap(~.x %>% mutate(idx = .y)) %>% 
+#   bind_rows() %>% 
+#   group_by(idx) %>% 
+#   mutate(comt = max(comp2)) %>% 
+#   slice(1) %>% 
+#   filter(comt==2, round(sum_angle2) == 180,ns==2) %>% 
+#   pull(idx) %>% 
+#   `[`(93)
 
 pols3[904,] %>% st_write("wert.gpkg",delete_layer = T)
 res2[[904]] %>%
